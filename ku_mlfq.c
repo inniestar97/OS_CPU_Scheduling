@@ -40,13 +40,13 @@ const int STEPDOWN_TIME = 2;
 List* queue[3]; // priority에 따른 3개 Linked-List : priority 2, 1 ,0 순
 Process* running; // current running process
 int timePast = 0; // all running time
-int timeSliceToRun;
+int timeSliceToRun; // 프로그램 종료시간 argv[2] 값 저장
 
 /*
-    create Process 이후 time scheduling을 위해
+    초기 create Process 이후 time scheduling을 위해
     가장 높은 priority(3)에 process 삽입을 위한 함수
 */
-void listInit();
+void listInit(); // 초기 프로세스 생성을 위한 연결리스트 초기화 함수
 void initInsert_process(pid_t pid);
 
 void what_OS_do();
@@ -66,7 +66,12 @@ void os_timer_handler(); // os에서 time Slice (1s) 호출 handler
 const int MAINTAIN = 0;
 const int STEPDOWN = 1;
 void insert_process(Process* running, int flag);
+/*
+    가장 높은 priority list에 첫번째로 꺼내와야하는 프로세스
+    프로세스가 모든 리스트에 없을경우 NULL을 리턴한다
+*/
 Process* extract_process();
+
 void priority_boost();
 void quick_sort(Process* arr[], int start, int end); // priority boost 내부에서 사용하는 sort
 
@@ -169,6 +174,10 @@ void os_timer_handler() {
     running->use_cpu_time += 1; // 1초 마다 실행되므로 1초 추가
     timePast += 1; // 총 시작한 시간으로부터 1초 추가
 
+    /*
+        프로그램 실행시간이 다 되면 종료
+        kill 함수와 SIGINT를 사용하여 같은 집합에 있는 프로세스 모두 종료
+    */
     if (timePast == timeSliceToRun) {
         kill(0, SIGINT);
     }
@@ -242,7 +251,7 @@ Process* extract_process() {
         }
     }
 
-    return 0;
+    return NULL;
 }
 
 void priority_boost() {
@@ -252,7 +261,7 @@ void priority_boost() {
 
     while (1) {
         Process* ex = extract_process();
-        if (ex == 0) break;
+        if (ex == NULL) break;
 
         // 모든 프로세스 정보 초기화
         ex->next = NULL;
