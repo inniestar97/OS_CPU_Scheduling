@@ -40,6 +40,7 @@ const int STEPDOWN_TIME = 2;
 List* queue[3]; // priority에 따른 3개 Linked-List : priority 2, 1 ,0 순
 Process* running; // current running process
 int timePast = 0; // all running time
+int timeSliceToRun;
 
 /*
     create Process 이후 time scheduling을 위해
@@ -87,6 +88,7 @@ int main(int argc, char* argv[]) {
 */
 
     int process_count = atoi(argv[1]);
+    timeSliceToRun = atoi(argv[2]);
     pid_t pid;
     int i;
 
@@ -99,6 +101,7 @@ int main(int argc, char* argv[]) {
         } else if (pid > 0) { // parent
             initInsert_process(pid);
         } else { // child
+
             char c[2];
             c[0] = 'A' + i;
             c[1] = '\0';
@@ -106,14 +109,13 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "execl Invalid: Errno.%d\n", errno);
                 exit(1);
             }
-            break;
+
         }
     }
 
-    if (pid != 0) {     // ----- Parent Process Do (OS)
-        sleep(5);
-        what_OS_do();
-    }
+    // ----- Parent Process Do (OS)
+    sleep(5);
+    what_OS_do();
 
     while (1);
     return 0;
@@ -167,13 +169,32 @@ void os_timer_handler() {
     running->use_cpu_time += 1; // 1초 마다 실행되므로 1초 추가
     timePast += 1; // 총 시작한 시간으로부터 1초 추가
 
-    if (timePast % BOOST_TIME == 0)
+    if (timePast == timeSliceToRun) {
+        kill(0, SIGINT);
+    }
+
+    if (timePast % BOOST_TIME == 0) {
+        insert_process(running, MAINTAIN);
         priority_boost();
-    else if (running->use_cpu_time == STEPDOWN_TIME)
+    } else if (running->use_cpu_time == STEPDOWN_TIME)
         insert_process(running, STEPDOWN);
     else
         insert_process(running, MAINTAIN);
 
+/* ---------------------- checked ----------------------------- */
+/*               2 초마다 priority 가 내려가는지 확인                 */
+    // int i = 0;
+    // for (i = 2; i >= 0; i--) {
+    //     fprintf(stderr, "%d : ", i + 1);
+    //     Process* ps = queue[i]->head;
+    //     while (1) {
+    //         if (ps == NULL) break;
+    //         fprintf(stderr, "%d ", ps->pid);
+    //         ps = ps->next;
+    //     }
+    //     fprintf(stderr, "\n");
+    // }
+/* ------------------------------------------------------------ */
     Process* focus = extract_process();
     running = focus;
     kill(running->pid, SIGCONT);
@@ -214,13 +235,14 @@ Process* extract_process() {
             ps = queue[i]->head;
 
             queue[i]->head = ps->next;
+            if (queue[i]->head == NULL) queue[i]->tail = NULL;
             ps->next = NULL;
 
             return ps;
         }
     }
 
-    return NULL;
+    return 0;
 }
 
 void priority_boost() {
@@ -230,8 +252,7 @@ void priority_boost() {
 
     while (1) {
         Process* ex = extract_process();
-
-        if (ex == NULL) break;
+        if (ex == 0) break;
 
         // 모든 프로세스 정보 초기화
         ex->next = NULL;
@@ -259,23 +280,23 @@ void quick_sort(Process* arr[], int start, int end) {
     Process* temp;
 
     while (i <= j) {
-        while (i <= end && arr[i]->pid <= arr[pivot]->pid) {
-            i++;
+        while (i <= end && ((int) arr[i]->pid) <= ((int) arr[pivot]->pid)) {
+            ++i;
         }
-        while (j > start && arr[j]->pid >= arr[pivot]->pid) {
-            j--;
+        while (j > start && ((int) arr[j]->pid) >= ((int) arr[pivot]->pid)) {
+            --j;
         }
 
-        if (i > j) {
-            temp = arr[j];
-            arr[j] = arr[pivot];
-            arr[pivot] = temp;
-        } else {
-            temp = arr[i];
-            arr[i] = arr[j];
-            arr[j] = temp;
-        }
+        if (i >= j) break;
+
+        temp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = temp;
     }
+
+    temp = arr[j];
+    arr[j] = arr[pivot];
+    arr[pivot] = temp;
 
     quick_sort(arr, start, j - 1);
     quick_sort(arr, j + 1, end);
