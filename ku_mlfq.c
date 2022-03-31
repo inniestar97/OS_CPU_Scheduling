@@ -5,6 +5,15 @@
 #include <unistd.h>
 #include <errno.h>
 
+/*
+    각자의 process를 구조체 내부에 정의하여 관리.
+    Linked-List로 구성되어 Process의 timesharing을 가능게 함.
+
+    next : 다음 Process
+    pid : 관리되고 있는 Process id
+    use_cpu_time : 현재 priority에서 cpu사용 시간
+    priority : 현재 프로세스의 priority
+*/
 typedef struct process {
     struct process *next;
     pid_t pid;
@@ -12,44 +21,60 @@ typedef struct process {
     int priority;
 } Process;
 
+/*
+    각 Process들을 관리하고있는 Linked list
+    Priority에 따라 3가지가 존재.
+*/
 typedef struct list {
-    struct process *head;
-    struct process *tail;
+    Process* head;
+    Process* tail;
 } List;
 
+/*
+    10s 이후 모든 Process Boost Priority
+    use_cpu_time 2s이후 priority step down
+*/
 const int BOOST_TIME = 10;
-const int STEP_DOWN_TIME = 2;
+const int STEPDOWN_TIME = 2;
 
+List* queue[3]; // priority에 따른 3개 Linked-List : priority 2, 1 ,0 순
+Process* running; // current running process
+int timePast = 0; // all running time
+
+/*
+    create Process 이후 time scheduling을 위해
+    가장 높은 priority(3)에 process 삽입을 위한 함수
+*/
+void listInit();
+void initInsert_process(pid_t pid);
+
+void what_OS_do();
+
+void os_timer_handler(); // os에서 time Slice (1s) 호출 handler
+
+/*
+    현재 실행되는 Process (running) 삽입
+    MAINTAIN => 기존 Priority 유지
+    STEPDOWN => Priority step down
+
+    void insert_process(Process*, int)와 함께 사용
+    args :
+        0 : Process* => current running Process
+        1 : int => flag : MAINTAIN, STEPDOWN
+*/
 const int MAINTAIN = 0;
 const int STEPDOWN = 1;
-
-List* queue[3];
-Process* running;
-int timeSliceCount = 0;
-
-void linkedListInit();
-void initProcesses(pid_t pid);
-
-void os_handler();
-void os_signal_init();
-void os_timer_init();
-void what_OS_do();
-Process* getProcess();
-void what_Process_do();
-
-void insert_process(Process*, int);
-void priorityBoost();
+void insert_process(Process* running, int flag);
+Process* extract_process();
+void priority_boost();
+void quick_sort(Process* arr[], int start, int end); // priority boost 내부에서 사용하는 sort
 
 int main(int argc, char* argv[]) {
-
-    /*
-        ------ Check the all Argument sets -------
-    */
-    if (argc < 3) {
-        fprintf(stderr, "Insuffient number of Argument.\n");
-        exit(1);
-    } else if (argc > 3) {
-        fprintf(stderr, "To Many Argment.\n");
+/*
+----------------- Check the all Argument set ------------------------
+*/
+    if (argc != 3) {
+        fprintf(stderr, "It's not fint in number of Arguments.\n");
         exit(1);
     }
 
@@ -57,55 +82,44 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Argument is not in Correct Range.\n");
         exit(1);
     }
-    //  -------------------------------------------
+/*
+----------------------------------------------------------------------
+*/
 
     int process_count = atoi(argv[1]);
-    pid_t pid; // OS 역할의 프로세스 구분을 위한 변수
+    pid_t pid;
     int i;
 
-    linkedListInit(); // queue 초기화
+    listInit();
     for (i = 0; i < process_count; i++) {
         pid = fork();
-
         if (pid < 0) {
-            fprintf(stderr, "fork Error: Errno.%d\n", errno);
+            fprintf(stderr, "fork Error: errno.%d\n", errno);
             exit(1);
-        } else if (pid > 0) { // 부모 프로세스
-
-            initProcesses(pid); // 모든 프로세스 큐 삽입
-
-        } else { // 자식 프로세스
-
-            if (kill(getpid(), SIGSTOP) == -1) { // 모든 프로세스는 initializeiation 시 멈춰있는다.
-                fprintf(stderr, "initializeializing SIGSTOP Error: Errno.%d\n", errno);
+        } else if (pid > 0) { // parent
+            initInsert_process(pid);
+        } else { // child
+            char c[2];
+            c[0] = 'A' + i;
+            c[1] = '\0';
+            if (execl("./ku_app", "./ku_app", c, (char*) 0) == -1) {
+                fprintf(stderr, "execl Invalid: Errno.%d\n", errno);
+                exit(1);
             }
             break;
-
         }
     }
 
-    if (pid != 0) {     // ----- What Parent Process (OS) do
+    if (pid != 0) {     // ----- Parent Process Do (OS)
         sleep(5);
-        os_timer_init();
         what_OS_do();
-    } else {            // ----- What Child Process do
-        what_Process_do();
     }
 
-    // while (1);
+    while (1);
     return 0;
-} 
-
-void linkedListInit() {
-    int i = 0;
-    for (i = 0; i < 3; i++) {
-        queue[i] = (List*) malloc(sizeof(List));
-        queue[i]->head = NULL;
-        queue[i]->tail = NULL;
-    }
 }
 
-void initProcesses(pid_t pid) {
+void initInsert_process(pid_t pid) {
     Process* ps = (Process*) malloc(sizeof(Process));
     ps->next = NULL;
     ps->pid = pid;
@@ -120,57 +134,79 @@ void initProcesses(pid_t pid) {
     }
 }
 
-void os_handler() {
-    
-    /*
-        TODO list -> 해결? 확인 한번 더할것
-        0. 이거 os에서 1초마다 실행되는거임
-        1. 가장 높은 priority에 있는 거 맨 앞에꺼 먼저 꺼내와
-        2. 꺼내와서 점유 시간이 2초 됐는지 확인해, 2초 지났으면 한단계 priority 내려
-        3. 안지났으면 현재 queue 에서 맨 뒤로 보내 (Insert)
-        4. 이때 10초 지났는지 봐야대 10초 됐으면 모든 큐에잇는거 boost해줘야해 -> priorityBoost
-    */
-
-    kill(running->pid, SIGSTOP); // 기존 프로세스 Stop
-    running->use_cpu_time += 1;
-    timeSliceCount += 1;
-
-    if (timeSliceCount == BOOST_TIME) {
-        priorityBoost();
-    } else if (running->use_cpu_time == STEP_DOWN_TIME) {
-        insert_process(running, STEPDOWN);
-    } else { // 같은 priority의 tail에 삽입
-        insert_process(running, MAINTAIN);
+void listInit() {
+    int i = 0;
+    for (i = 0; i < 3; i++) {
+        queue[i] = (List*) malloc(sizeof(List));
+        queue[i]->head = queue[i]->tail = NULL;
     }
-
-    Process* focus = getProcess();
-    running = focus; // 다음 프로세스로 change
-    kill(running->pid, SIGCONT); // 새로운 프로세스 Start
-
 }
 
-void os_signal_init() {
+void what_OS_do() {
+    // 현재 priority가 가장 높은 queue 앞에 있는거 가져와서 실행
+    running = extract_process();
+    kill(running->pid, SIGCONT);
+
     struct sigaction ps_check_sig;
     sigemptyset(&ps_check_sig.sa_mask);
     ps_check_sig.sa_flags = 0;
-    ps_check_sig.sa_handler = os_handler;
-
+    ps_check_sig.sa_handler = os_timer_handler;
     sigaction(SIGALRM, &ps_check_sig, NULL);
-}
 
-void os_timer_init() {
-
-    // ---------- 1초마다 프로세스 변경 타이머 -----------
+    // 1s time slice timer
     struct itimerval ch_ps_timer;
     ch_ps_timer.it_interval.tv_sec = 1;
     ch_ps_timer.it_interval.tv_usec = 0;
     ch_ps_timer.it_value.tv_sec = 1;
     ch_ps_timer.it_value.tv_usec = 0;
-
     setitimer(ITIMER_REAL, &ch_ps_timer, NULL);
 }
 
-Process* getProcess() { // 가장 우선순위가 높은 Process 가져오기
+void os_timer_handler() {
+    kill(running->pid, SIGSTOP); // 돌고 있는 Process 중지
+    running->use_cpu_time += 1; // 1초 마다 실행되므로 1초 추가
+    timePast += 1; // 총 시작한 시간으로부터 1초 추가
+
+    if (timePast % BOOST_TIME == 0)
+        priority_boost();
+    else if (running->use_cpu_time == STEPDOWN_TIME)
+        insert_process(running, STEPDOWN);
+    else
+        insert_process(running, MAINTAIN);
+
+    Process* focus = extract_process();
+    running = focus;
+    kill(running->pid, SIGCONT);
+}
+
+void insert_process(Process* ps, int flag) {
+    /*
+        현재 실행되는 Process (running) 삽입
+        MAINTAIN => 기존 Priority 유지
+        STEPDOWN => Priority step down
+
+        void insert_process(Process*, int)와 함께 사용
+        args :
+            0 : Process* => current running Process
+            1 : int => flag : MAINTAIN, STEPDOWN
+    */
+   int q_idx;
+   if (flag == STEPDOWN) {
+       ps->use_cpu_time = 0;
+       if (ps->priority > 1) ps->priority -= 1;
+   }
+
+   q_idx = ps->priority - 1;
+
+   if (queue[q_idx]->head == NULL && queue[q_idx]->tail == NULL) {
+       queue[q_idx]->head = queue[q_idx]->tail = ps;
+   } else {
+       queue[q_idx]->tail->next = ps;
+       queue[q_idx]->tail = ps;
+   }
+}
+
+Process* extract_process() {
     Process* ps;
     int i;
     for (i = 2; i >= 0; i--) {
@@ -183,47 +219,64 @@ Process* getProcess() { // 가장 우선순위가 높은 Process 가져오기
             return ps;
         }
     }
+
+    return NULL;
 }
 
-void what_OS_do() {
+void priority_boost() {
 
-    os_signal_init(); // 시그널 초기화
-    os_timer_init(); // 타이머 초기화
+    int i = 0, arr_idx = 0;
+    Process* arr[26];
 
-    running = getProcess();
-    kill(running->pid, SIGCONT);
+    while (1) {
+        Process* ex = extract_process();
 
-}
+        if (ex == NULL) break;
 
-void what_Process_do() {
-/*
-    TODO
+        // 모든 프로세스 정보 초기화
+        ex->next = NULL;
+        ex->priority = 3;
+        ex->use_cpu_time = 0;
 
-    나중에 올라오는 강의자료 파일    
-*/
-}
-
-void insert_process(Process* ps, int flag) {
-    // flag == MAINTAIN : 같은 priority 맨 뒷줄
-    // flag == STEPDOWN : priority 한단계 내림
-    int q_idx;
-
-    if (flag == STEPDOWN) {
-        ps->use_cpu_time = 0;
-        if (ps->priority > 1) ps->priority -= 1;
+        arr[arr_idx++] = ex;
     }
 
-    q_idx = ps->priority - 1;
+    // 프로세스 아이디 오름차순 정렬 -> 알파벳 순으로 정렬
+    quick_sort(arr, 0, arr_idx - 1);
 
-    if (queue[q_idx]->head == NULL && queue[q_idx]->tail == NULL) {
-        queue[q_idx]->head = queue[q_idx]->tail = ps;
-    } else {
-        queue[q_idx]->tail->next = ps;
-        queue[q_idx]->tail = ps;
+    // Priority3에 모두 삽입
+    for (i = 0; i < arr_idx; i++) {
+        insert_process(arr[i], MAINTAIN);
     }
 }
 
-void priorityBoost() {
-    timeSliceCount = 0;
+void quick_sort(Process* arr[], int start, int end) {
+    if (start >= end) return;
 
+    int pivot = start;
+    int i = pivot + 1;
+    int j = end;
+    Process* temp;
+
+    while (i <= j) {
+        while (i <= end && arr[i]->pid <= arr[pivot]->pid) {
+            i++;
+        }
+        while (j > start && arr[j]->pid >= arr[pivot]->pid) {
+            j--;
+        }
+
+        if (i > j) {
+            temp = arr[j];
+            arr[j] = arr[pivot];
+            arr[pivot] = temp;
+        } else {
+            temp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = temp;
+        }
+    }
+
+    quick_sort(arr, start, j - 1);
+    quick_sort(arr, j + 1, end);
 }
