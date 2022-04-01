@@ -26,8 +26,8 @@ typedef struct process {
     Priority에 따라 3가지가 존재.
 */
 typedef struct list {
-    Process* head;
-    Process* tail;
+    struct process* head;
+    struct process* tail;
 } List;
 
 /*
@@ -74,20 +74,21 @@ Process* extract_process();
 
 void priority_boost();
 void quick_sort(Process* arr[], int start, int end); // priority boost 내부에서 사용하는 sort
+void freeAllocation();
 
 int main(int argc, char* argv[]) {
 /*
 ----------------- Check the all Argument set ------------------------
 */
-    if (argc != 3) {
-        fprintf(stderr, "It's not fint in number of Arguments.\n");
-        exit(1);
-    }
+    // if (argc != 3) {
+    //     fprintf(stderr, "It's not fint in number of Arguments.\n");
+    //     exit(1);
+    // }
 
-    if (atoi(argv[1]) < 1 || atoi(argv[1]) > 26) {
-        fprintf(stderr, "Argument is not in Correct Range.\n");
-        exit(1);
-    }
+    // if (atoi(argv[1]) < 1 || atoi(argv[1]) > 26) {
+    //     fprintf(stderr, "Argument is not in Correct Range.\n");
+    //     exit(1);
+    // }
 /*
 ----------------------------------------------------------------------
 */
@@ -101,8 +102,8 @@ int main(int argc, char* argv[]) {
     for (i = 0; i < process_count; i++) {
         pid = fork();
         if (pid < 0) {
-            fprintf(stderr, "fork Error: errno.%d\n", errno);
-            exit(1);
+            // fprintf(stderr, "fork Error: errno.%d\n", errno);
+            // exit(1);
         } else if (pid > 0) { // parent
             initInsert_process(pid);
         } else { // child
@@ -111,8 +112,8 @@ int main(int argc, char* argv[]) {
             c[0] = 'A' + i;
             c[1] = '\0';
             if (execl("./ku_app", "./ku_app", c, (char*) 0) == -1) {
-                fprintf(stderr, "execl Invalid: Errno.%d\n", errno);
-                exit(1);
+                // fprintf(stderr, "execl Invalid: Errno.%d\n", errno);
+                // exit(1);
             }
 
         }
@@ -179,6 +180,7 @@ void os_timer_handler() {
         kill 함수와 SIGINT를 사용하여 같은 집합에 있는 프로세스 모두 종료
     */
     if (timePast == timeSliceToRun) {
+        freeAllocation();
         kill(0, SIGINT);
     }
 
@@ -309,4 +311,24 @@ void quick_sort(Process* arr[], int start, int end) {
 
     quick_sort(arr, start, j - 1);
     quick_sort(arr, j + 1, end);
+}
+
+void freeAllocation() {
+    /*
+        연결 리스트에 존재하는 모든 구조체 할당 해제
+        현재 진행되고 있던 running에 저장된 구조체 할당 해제
+    */
+
+   int i;
+
+   free(running);
+   while (1) {
+       Process* ps = extract_process();
+       if (ps == NULL) break;
+       free(ps);
+   }
+
+   for (i = 0; i < 3; i++) {
+       free(queue[i]);
+   }
 }
